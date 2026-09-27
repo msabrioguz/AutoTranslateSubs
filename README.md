@@ -212,5 +212,4 @@ MIT License - Feel free to use and modify.
 - [ ] Export/import configuration
 - [ ] Dark/light theme toggle
 - [ ] Keyboard shortcuts
-- [ ] Batch queue management (pause/resume individual files)#   A u t o T r a n s l a t e S u b s  
- 
+- [ ] Batch queue management (pause/resume individual files)
