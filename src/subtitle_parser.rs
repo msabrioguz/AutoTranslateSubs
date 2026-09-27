@@ -615,4 +615,45 @@ mod tests {
         assert!(content.contains("Second line"), "Missing translation should fall back to original");
         assert!(content.contains("ÃœÃ§Ã¼ncÃ¼ satÄ±r"), "Valid translation should be used");
     }
+
+    #[test]
+    fn write_preserves_timestamps_and_count() {
+        // Task 08 requirements 6/7: attaching translations must never touch
+        // timestamps or the entry count — parse → write → parse keeps every
+        // start/end time identical.
+        let content =
+            "1\n00:00:01,000 --> 00:00:02,500\nHello\n\n2\n00:00:03,250 --> 00:00:04,750\nWorld\n";
+        let parsed = parse_srt_content(content).unwrap();
+        assert_eq!(parsed.len(), 2);
+
+        let file = SubtitleFile {
+            path: "roundtrip.srt".into(),
+            entries: parsed
+                .into_iter()
+                .map(|mut e| {
+                    e.translated_text = Some(format!("T{}", e.index));
+                    e
+                })
+                .collect(),
+            source_language: Language::English,
+            target_language: Language::Turkish,
+        };
+
+        let out = std::env::temp_dir().join(format!("ats_ts_roundtrip_{}.srt", std::process::id()));
+        write_srt_file(&file, &out).unwrap();
+        let written = parse_srt_content(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&out);
+
+        assert_eq!(
+            written.len(),
+            file.entries.len(),
+            "subtitle count must not change"
+        );
+        for (before, after) in file.entries.iter().zip(written.iter()) {
+            assert_eq!(before.start_time, after.start_time, "start time changed");
+            assert_eq!(before.end_time, after.end_time, "end time changed");
+        }
+        assert_eq!(written[0].text, "T1", "translation must be written");
+        assert_eq!(written[1].text, "T2", "translation must be written");
+    }
 }

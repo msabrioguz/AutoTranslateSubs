@@ -1,0 +1,362 @@
+1
+00:00:00,249 --> 00:00:03,740
+Have you ever dreamed of creating your own
+horror survival game?
+
+2
+00:00:04,169 --> 00:00:07,980
+If the answer is yes, you're in a great
+place because in this course you will
+
+3
+00:00:07,981 --> 00:00:13,380
+learn everything that you need to know in
+order to create your own dream horror game.
+
+4
+00:00:13,580 --> 00:00:14,820
+We'll start very simple.
+
+5
+00:00:15,004 --> 00:00:19,880
+We will create a simple first person
+character movement and we'll also expand
+
+6
+00:00:19,881 --> 00:00:22,360
+this movement to add crouching and
+sprinting.
+
+7
+00:00:22,510 --> 00:00:26,380
+Then we will see how we can create
+interaction system in Unreal Engine and we
+
+8
+00:00:26,381 --> 00:00:29,880
+will create a lot of different
+interactable actors such as doors,
+
+9
+00:00:30,230 --> 00:00:32,820
+drawers, paper pages that we can collect.
+
+10
+00:00:33,300 --> 00:00:38,240
+We will also give our player a realistic
+flashlight because we will create a creepy
+
+11
+00:00:38,539 --> 00:00:40,760
+realistic and dark forest.
+
+12
+00:00:41,220 --> 00:00:46,220
+In that forest we will create a monster AI
+that will try to find and kill the player.
+
+13
+00:00:46,589 --> 00:00:48,980
+We will also cover a lot of sound design.
+
+14
+00:00:49,020 --> 00:00:52,188
+We will see how we can
+create realistic footsteps that will
+
+15
+00:00:52,189 --> 00:00:54,800
+change depending on the
+material that we're stepping into.
+
+16
+00:00:54,970 --> 00:00:57,505
+We're also going to add
+a sound to pretty much
+
+17
+00:00:57,506 --> 00:01:00,080
+every interactable actor
+and our monster enemy.
+
+18
+00:01:00,280 --> 00:01:04,620
+After that we will create a complete
+gameplay loop where we have to collect
+
+19
+00:01:04,694 --> 00:01:09,420
+eight different pages, find a key to a
+hidden cabin where we will have to burn
+
+20
+00:01:09,421 --> 00:01:12,540
+these pages and kill the monster before he
+kills us.
+
+21
+00:01:12,679 --> 00:01:16,800
+After that we will also see how we can
+create different menus in Unreal Engine
+
+22
+00:01:16,801 --> 00:01:21,960
+such as main menu or pause menu and after
+completing the game I will show you how
+
+23
+00:01:21,961 --> 00:01:24,234
+you can package this
+project so you can share
+
+24
+00:01:24,235 --> 00:01:26,400
+it with your friends
+or upload it to internet.
+
+25
+00:01:26,604 --> 00:01:30,040
+If that sounds interesting, I will see you
+in the first lesson.
+
+26
+00:00:00,249 --> 00:00:03,740
+Have you ever dreamed of creating your own
+horror survival game?
+
+27
+00:00:04,169 --> 00:00:07,980
+If the answer is yes, you're in a great
+place because in this course you will
+
+28
+00:00:07,981 --> 00:00:13,380
+learn everything that you need to know in
+order to create your own dream horror game.
+
+29
+00:00:13,580 --> 00:00:14,820
+We'll start very simple.
+
+30
+00:00:15,004 --> 00:00:19,880
+We will create a simple first person
+character movement and we'll also expand
+
+31
+00:00:19,881 --> 00:00:22,360
+this movement to add crouching and
+sprinting.
+
+32
+00:00:22,510 --> 00:00:26,380
+Then we will see how we can create
+interaction system in Unreal Engine and we
+
+33
+00:00:26,381 --> 00:00:29,880
+will create a lot of different
+interactable actors such as doors,
+
+34
+00:00:30,230 --> 00:00:32,820
+drawers, paper pages that we can collect.
+
+35
+00:00:33,300 --> 00:00:38,240
+We will also give our player a realistic
+flashlight because we will create a creepy
+
+36
+00:00:38,539 --> 00:00:40,760
+realistic and dark forest.
+
+37
+00:00:41,220 --> 00:00:46,220
+In that forest we will create a monster AI
+that will try to find and kill the player.
+
+38
+00:00:46,589 --> 00:00:48,980
+We will also cover a lot of sound design.
+
+39
+00:00:49,020 --> 00:00:52,188
+We will see how we can
+create realistic footsteps that will
+
+40
+00:00:52,189 --> 00:00:54,800
+change depending on the
+material that we're stepping into.
+
+41
+00:00:54,970 --> 00:00:57,505
+We're also going to add
+a sound to pretty much
+
+42
+00:00:57,506 --> 00:01:00,080
+every interactable actor
+and our monster enemy.
+
+43
+00:01:00,280 --> 00:01:04,620
+After that we will create a complete
+gameplay loop where we have to collect
+
+44
+00:01:04,694 --> 00:01:09,420
+eight different pages, find a key to a
+hidden cabin where we will have to burn
+
+45
+00:01:09,421 --> 00:01:12,540
+these pages and kill the monster before he
+kills us.
+
+46
+00:01:12,679 --> 00:01:16,800
+After that we will also see how we can
+create different menus in Unreal Engine
+
+47
+00:01:16,801 --> 00:01:21,960
+such as main menu or pause menu and after
+completing the game I will show you how
+
+48
+00:01:21,961 --> 00:01:24,234
+you can package this
+project so you can share
+
+49
+00:01:24,235 --> 00:01:26,400
+it with your friends
+or upload it to internet.
+
+50
+00:01:26,604 --> 00:01:30,040
+If that sounds interesting, I will see you
+in the first lesson.
+
+51
+00:00:00,249 --> 00:00:03,740
+Have you ever dreamed of creating your own
+horror survival game?
+
+52
+00:00:04,169 --> 00:00:07,980
+If the answer is yes, you're in a great
+place because in this course you will
+
+53
+00:00:07,981 --> 00:00:13,380
+learn everything that you need to know in
+order to create your own dream horror game.
+
+54
+00:00:13,580 --> 00:00:14,820
+We'll start very simple.
+
+55
+00:00:15,004 --> 00:00:19,880
+We will create a simple first person
+character movement and we'll also expand
+
+56
+00:00:19,881 --> 00:00:22,360
+this movement to add crouching and
+sprinting.
+
+57
+00:00:22,510 --> 00:00:26,380
+Then we will see how we can create
+interaction system in Unreal Engine and we
+
+58
+00:00:26,381 --> 00:00:29,880
+will create a lot of different
+interactable actors such as doors,
+
+59
+00:00:30,230 --> 00:00:32,820
+drawers, paper pages that we can collect.
+
+60
+00:00:33,300 --> 00:00:38,240
+We will also give our player a realistic
+flashlight because we will create a creepy
+
+61
+00:00:38,539 --> 00:00:40,760
+realistic and dark forest.
+
+62
+00:00:41,220 --> 00:00:46,220
+In that forest we will create a monster AI
+that will try to find and kill the player.
+
+63
+00:00:46,589 --> 00:00:48,980
+We will also cover a lot of sound design.
+
+64
+00:00:49,020 --> 00:00:52,188
+We will see how we can
+create realistic footsteps that will
+
+65
+00:00:52,189 --> 00:00:54,800
+change depending on the
+material that we're stepping into.
+
+66
+00:00:54,970 --> 00:00:57,505
+We're also going to add
+a sound to pretty much
+
+67
+00:00:57,506 --> 00:01:00,080
+every interactable actor
+and our monster enemy.
+
+68
+00:01:00,280 --> 00:01:04,620
+After that we will create a complete
+gameplay loop where we have to collect
+
+69
+00:01:04,694 --> 00:01:09,420
+eight different pages, find a key to a
+hidden cabin where we will have to burn
+
+70
+00:01:09,421 --> 00:01:12,540
+these pages and kill the monster before he
+kills us.
+
+71
+00:01:12,679 --> 00:01:16,800
+After that we will also see how we can
+create different menus in Unreal Engine
+
+72
+00:01:16,801 --> 00:01:21,960
+such as main menu or pause menu and after
+completing the game I will show you how
+
+73
+00:01:21,961 --> 00:01:24,234
+you can package this
+project so you can share
+
+74
+00:01:24,235 --> 00:01:26,400
+it with your friends
+or upload it to internet.
+
+75
+00:01:26,604 --> 00:01:30,040
+If that sounds interesting, I will see you
+in the first lesson.
