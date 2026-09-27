@@ -15,6 +15,10 @@ pub struct RequestStats {
     pub batch_requests: u32,
     pub batch_seconds: f64,
     pub batch_entries: u32,
+    /// Entries actually written to results by batch responses
+    pub batch_covered: u32,
+    /// Chunks mapped by position because the model returned wrong indexes
+    pub batch_positional: u32,
     pub batch_prompt_tokens: u64,
     pub batch_gen_tokens: u64,
     /// Batch request errors or unparseable responses (trigger fallback)
@@ -23,19 +27,24 @@ pub struct RequestStats {
     pub single_seconds: f64,
     pub single_prompt_tokens: u64,
     pub single_gen_tokens: u64,
+    /// One line per problematic batch chunk: parsed/covered counts, a sample
+    /// of returned indexes and a preview of the raw model response.
+    pub batch_diagnostics: Vec<String>,
 }
 
 impl RequestStats {
     pub fn summary(&self) -> String {
         format!(
-            "batch: {} req, {:.1}s, {} entries, {} prompt tok, {} gen tok, {} fail | \
+            "batch: {} req, {:.1}s, {}/{} covered, {} prompt tok, {} gen tok, {} fail, {} positional | \
              single: {} req, {:.1}s, {} prompt tok, {} gen tok",
             self.batch_requests,
             self.batch_seconds,
+            self.batch_covered,
             self.batch_entries,
             self.batch_prompt_tokens,
             self.batch_gen_tokens,
             self.batch_failures,
+            self.batch_positional,
             self.single_requests,
             self.single_seconds,
             self.single_prompt_tokens,
@@ -233,6 +242,15 @@ impl OllamaClient {
             stats.batch_entries += chunk.len() as u32;
 
             let mut parsed_ok = false;
+            let mut chunk_covered = 0u32;
+            let chunk_first = chunk.first().map(|(i, _)| *i).unwrap_or(0);
+            let chunk_last = chunk.last().map(|(i, _)| *i).unwrap_or(0);
+            let preview = |raw: &str| -> String {
+                raw.chars()
+                    .take(200)
+                    .collect::<String>()
+                    .replace(['\n', '\r'], " ")
+            };
             match batch_resp {
                 Ok(resp) => {
                     stats.batch_prompt_tokens += resp.prompt_eval_count.unwrap_or(0);
@@ -240,24 +258,55 @@ impl OllamaClient {
                     match parse_batch_response(&resp.response) {
                         Ok(entries) => {
                             parsed_ok = true;
-                            for entry in entries {
-                                if entry.index < results.len() && !entry.text.trim().is_empty() {
-                                    results[entry.index] = entry.text;
-                                }
+                            let parsed_count = entries.len();
+                            let idx_sample: Vec<usize> =
+                                entries.iter().map(|e| e.index).take(10).collect();
+                            let (covered, positional) =
+                                map_batch_entries(entries, chunk, &mut results);
+                            chunk_covered = covered;
+                            stats.batch_covered += covered;
+                            if positional {
+                                stats.batch_positional += 1;
+                            }
+                            if covered < chunk.len() as u32 {
+                                stats.batch_diagnostics.push(format!(
+                                    "chunk {}-{}: parsed {}, covered {}, idx {:?} | {}",
+                                    chunk_first,
+                                    chunk_last,
+                                    parsed_count,
+                                    covered,
+                                    idx_sample,
+                                    preview(&resp.response)
+                                ));
                             }
                         }
-                        Err(_) => stats.batch_failures += 1,
+                        Err(e) => {
+                            stats.batch_failures += 1;
+                            stats.batch_diagnostics.push(format!(
+                                "chunk {}-{}: parse error: {} | {}",
+                                chunk_first,
+                                chunk_last,
+                                e,
+                                preview(&resp.response)
+                            ));
+                        }
                     }
                 }
-                Err(_) => stats.batch_failures += 1,
+                Err(e) => {
+                    stats.batch_failures += 1;
+                    stats
+                        .batch_diagnostics
+                        .push(format!("chunk {}-{}: request error: {}", chunk_first, chunk_last, e));
+                }
             }
 
             let done = count_done(&results);
             let msg = if parsed_ok {
                 format!(
-                    "Batch: {} entries in {:.1}s ({}/{} done)",
+                    "Batch: {} entries in {:.1}s ({} covered, {}/{} done)",
                     chunk.len(),
                     elapsed,
+                    chunk_covered,
                     done,
                     total
                 )
@@ -390,6 +439,71 @@ fn clean_single_response(raw: &str) -> String {
         return t[1..t.len() - 1].trim().to_string();
     }
     t.to_string()
+}
+
+/// Maps a parsed batch response onto `results` for one chunk.
+///
+/// Strategy, in order of confidence:
+/// 1. **Index mapping** when every returned index belongs to this chunk and
+///    is distinct — no ambiguity (covers perfect and truncated responses).
+/// 2. **Positional mapping** when the count matches, indexes are distinct,
+///    but *none* of them belong to this chunk: the model renumbered them
+///    (e.g. every chunk restarts at 0). Entry `k` is assumed to be the
+///    translation of `chunk[k]`.
+/// 3. **Partial index mapping** for mixed/ambiguous responses: only entries
+///    whose index belongs to *this* chunk are accepted (each slot once), so
+///    wrong indexes can never overwrite another chunk's translations.
+///    Everything else is left for the single-request fallback.
+///
+/// Returns `(covered, used_positional)`. Entries with empty text are skipped.
+fn map_batch_entries(
+    entries: Vec<BatchTranslationEntry>,
+    chunk: &[(usize, &String)],
+    results: &mut [String],
+) -> (u32, bool) {
+    if chunk.is_empty() {
+        return (0, false);
+    }
+    let chunk_indices: Vec<usize> = chunk.iter().map(|(i, _)| *i).collect();
+    let mut covered = 0u32;
+
+    let mut seen = std::collections::HashSet::with_capacity(entries.len());
+    let distinct = entries.iter().all(|e| seen.insert(e.index));
+    let all_in_chunk = entries.iter().all(|e| chunk_indices.contains(&e.index));
+    let none_in_chunk = entries.iter().all(|e| !chunk_indices.contains(&e.index));
+
+    if all_in_chunk && distinct {
+        for e in entries {
+            if !e.text.trim().is_empty() {
+                results[e.index] = e.text;
+                covered += 1;
+            }
+        }
+        return (covered, false);
+    }
+
+    if entries.len() == chunk.len() && distinct && none_in_chunk {
+        // Model renumbered its indexes: fall back to position
+        for (e, (idx, _)) in entries.into_iter().zip(chunk) {
+            if !e.text.trim().is_empty() {
+                results[*idx] = e.text;
+                covered += 1;
+            }
+        }
+        return (covered, true);
+    }
+
+    // Mixed or ambiguous response: accept only this chunk's indexes, each once
+    for e in entries {
+        if chunk_indices.contains(&e.index)
+            && !e.text.trim().is_empty()
+            && results[e.index].is_empty()
+        {
+            results[e.index] = e.text;
+            covered += 1;
+        }
+    }
+    (covered, false)
 }
 
 fn parse_batch_response(raw: &str) -> Result<Vec<BatchTranslationEntry>> {
@@ -542,5 +656,89 @@ mod tests {
         assert_eq!(clean_single_response("\"Merhaba\" dedi"), "\"Merhaba\" dedi");
         // No wrapping quotes at both ends -> untouched
         assert_eq!(clean_single_response("Merhaba \"Veli\""), "Merhaba \"Veli\"");
+    }
+
+    fn entry(index: usize, text: &str) -> BatchTranslationEntry {
+        BatchTranslationEntry {
+            index,
+            text: text.to_string(),
+        }
+    }
+
+    fn chunk_of(indices: &[usize], texts: &[&str]) -> Vec<(usize, String)> {
+        indices
+            .iter()
+            .zip(texts.iter())
+            .map(|(i, t)| (*i, t.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn map_uses_indexes_when_model_keeps_them() {
+        let owned = chunk_of(&[25, 26], &["a", "b"]);
+        let chunk: Vec<(usize, &String)> = owned.iter().map(|(i, t)| (*i, t)).collect();
+        let mut results = vec![String::new(); 30];
+
+        let (covered, positional) =
+            map_batch_entries(vec![entry(25, "x"), entry(26, "y")], &chunk, &mut results);
+
+        assert_eq!((covered, positional), (2, false));
+        assert_eq!(results[25], "x");
+        assert_eq!(results[26], "y");
+    }
+
+    #[test]
+    fn map_falls_back_to_position_when_model_renumbers() {
+        // Chunk covers global indexes 25..27 but the model restarts at 0
+        let owned = chunk_of(&[25, 26, 27], &["a", "b", "c"]);
+        let chunk: Vec<(usize, &String)> = owned.iter().map(|(i, t)| (*i, t)).collect();
+        let mut results = vec![String::new(); 30];
+
+        let (covered, positional) = map_batch_entries(
+            vec![entry(0, "x"), entry(1, "y"), entry(2, "z")],
+            &chunk,
+            &mut results,
+        );
+
+        assert_eq!((covered, positional), (3, true));
+        assert_eq!(results[25], "x");
+        assert_eq!(results[26], "y");
+        assert_eq!(results[27], "z");
+        assert!(results[0].is_empty(), "must not touch other chunks' slots");
+    }
+
+    #[test]
+    fn map_partial_response_only_accepts_own_chunk_indexes() {
+        let owned = chunk_of(&[25, 26, 27], &["a", "b", "c"]);
+        let chunk: Vec<(usize, &String)> = owned.iter().map(|(i, t)| (*i, t)).collect();
+        let mut results = vec![String::new(); 30];
+        results[0] = "keep-me".to_string();
+
+        // Truncated/wrong response: one foreign index, two correct ones
+        let (covered, positional) = map_batch_entries(
+            vec![entry(0, "WRONG"), entry(25, "x"), entry(27, "z")],
+            &chunk,
+            &mut results,
+        );
+
+        assert_eq!((covered, positional), (2, false));
+        assert_eq!(results[0], "keep-me", "foreign index must be ignored");
+        assert_eq!(results[25], "x");
+        assert!(results[26].is_empty(), "missing entry left for fallback");
+        assert_eq!(results[27], "z");
+    }
+
+    #[test]
+    fn map_skips_empty_texts() {
+        let owned = chunk_of(&[0, 1], &["a", "b"]);
+        let chunk: Vec<(usize, &String)> = owned.iter().map(|(i, t)| (*i, t)).collect();
+        let mut results = vec![String::new(); 5];
+
+        let (covered, _) =
+            map_batch_entries(vec![entry(0, "x"), entry(1, "  ")], &chunk, &mut results);
+
+        assert_eq!(covered, 1);
+        assert_eq!(results[0], "x");
+        assert!(results[1].is_empty());
     }
 }

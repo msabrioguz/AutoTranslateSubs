@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod logger;
 mod models;
 mod ollama_client;
 mod subtitle_parser;

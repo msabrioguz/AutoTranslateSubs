@@ -378,7 +378,13 @@ mod tests {
     
     fn get_test_path(filename: &str) -> std::path::PathBuf {
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or(".".to_string());
-        // Try test_subs first, then target/release/examples
+        // Try tests/fixtures (committed), then test_subs, then target/release/examples
+        let fixtures = Path::new(&manifest_dir)
+            .join("tests/fixtures")
+            .join(filename);
+        if fixtures.exists() {
+            return fixtures;
+        }
         let test_subs = Path::new(&manifest_dir).join("test_subs").join(filename);
         if test_subs.exists() {
             return test_subs;

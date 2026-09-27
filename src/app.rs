@@ -210,6 +210,16 @@ struct ProgressUpdate {
     message: String,
 }
 
+/// Opens the log file in the system file manager (Windows Explorer).
+fn open_log_file(path: &Path) {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer").arg(path).spawn();
+    }
+    #[cfg(not(windows))]
+    let _ = path;
+}
+
 enum InitUpdate {
     Models(Result<Vec<String>, String>),
     Connection(ConnectionStatus),
@@ -218,6 +228,7 @@ enum InitUpdate {
 pub struct AutoTranslateApp {
     config: AppConfig,
     config_path: PathBuf,
+    log_path: PathBuf,
     
     selected_files: Vec<PathBuf>,
     translation_jobs: SharedJobs,
@@ -261,13 +272,31 @@ impl Default for AutoTranslateApp {
             .join("auto-translate-subs");
         std::fs::create_dir_all(&config_dir).ok();
         let config_path = config_dir.join("config.json");
+        let log_path = crate::logger::init(&config_dir.join("logs"));
         
         let config = if config_path.exists() {
-            std::fs::read_to_string(&config_path)
+            let loaded = std::fs::read_to_string(&config_path)
                 .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default()
+                .and_then(|s| serde_json::from_str(&s).ok());
+            match &loaded {
+                Some(_) => crate::logger::log(
+                    crate::logger::Level::Info,
+                    "app",
+                    &format!("config loaded: {}", config_path.display()),
+                ),
+                None => crate::logger::log(
+                    crate::logger::Level::Error,
+                    "app",
+                    &format!("config unreadable, using defaults: {}", config_path.display()),
+                ),
+            }
+            loaded.unwrap_or_default()
         } else {
+            crate::logger::log(
+                crate::logger::Level::Info,
+                "app",
+                "config not found, using defaults",
+            );
             AppConfig::default()
         };
         
@@ -280,6 +309,7 @@ impl Default for AutoTranslateApp {
         Self {
             config,
             config_path,
+            log_path,
             selected_files: Vec::new(),
             translation_jobs: Arc::new(Mutex::new(Vec::new())),
             current_job_index: None,
@@ -368,6 +398,7 @@ impl AutoTranslateApp {
         if self.log_messages.len() > 100 {
             self.log_messages.remove(0);
         }
+        crate::logger::log(crate::logger::level_for(msg), "app", msg);
     }
     
     fn add_files(&mut self, files: Vec<PathBuf>) {
@@ -377,6 +408,11 @@ impl AutoTranslateApp {
                 ext.eq_ignore_ascii_case("srt") || ext.eq_ignore_ascii_case("vtt")
             });
             if is_subtitle && !self.selected_files.contains(&file) {
+                crate::logger::log(
+                    crate::logger::Level::Info,
+                    "files",
+                    &format!("selected: {}", file.display()),
+                );
                 self.selected_files.push(file);
             }
         }
@@ -420,6 +456,11 @@ impl AutoTranslateApp {
     /// selected, and refreshes the job list automatically when the selection
     /// changed since the last preparation.
     fn select_tab(&mut self, tab: AppTab) {
+        crate::logger::log(
+            crate::logger::Level::Info,
+            "ui",
+            &format!("tab -> {:?}", tab),
+        );
         if tab == AppTab::Translation {
             if self.selected_files.is_empty() {
                 self.tab = AppTab::Files;
@@ -559,6 +600,21 @@ impl AutoTranslateApp {
             return;
         }
 
+        let pending_count = self
+            .translation_jobs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|j| j.status == JobStatus::Pending)
+            .count();
+        self.log(&format!(
+            "Translation requested: {} file(s), {} -> {}, model '{}'",
+            pending_count,
+            self.config.source_language.name(),
+            self.config.target_language.name(),
+            self.config.selected_model
+        ));
+
         self.sync_client_config();
         let Some(client) = self.ollama_client.clone() else {
             self.log("Ollama client is not initialized; check settings");
@@ -580,6 +636,7 @@ impl AutoTranslateApp {
             let send_log = |msg: &str| {
                 let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
                 let _ = log_sender.send(format!("[{}] {}", timestamp, msg));
+                crate::logger::log(crate::logger::level_for(msg), "worker", msg);
             };
 
             let send_progress = |job_index: usize, progress: f32, message: String| {
@@ -657,6 +714,14 @@ impl AutoTranslateApp {
 
                 match translations {
                     Ok((translations, stats)) => {
+                        let file_name = file_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        for diag in &stats.batch_diagnostics {
+                            send_log(&format!("[diag] {}: {}", file_name, diag));
+                        }
                         let untranslated = texts
                             .iter()
                             .zip(translations.iter())
@@ -1314,12 +1379,21 @@ impl AutoTranslateApp {
                             if let Some(job_mut) = jobs_guard.get_mut(job_idx) {
                                 let target_lang = job_mut.subtitle_file.target_language;
                                 let output_path = Self::generate_output_path(&job_mut.file_path, target_lang);
+                                let ts = chrono::Local::now().format("%H:%M:%S").to_string();
                                 if let Err(e) = write_subtitle_file(&job_mut.subtitle_file, &output_path) {
-                                    log_messages.push(format!("[{}] Kaydetme hatası: {}", 
-                                        chrono::Local::now().format("%H:%M:%S"), e));
+                                    log_messages.push(format!("[{}] Kaydetme hatası: {}", ts, e));
+                                    crate::logger::log(
+                                        crate::logger::Level::Error,
+                                        "preview",
+                                        &format!("Kaydetme hatası: {}", e),
+                                    );
                                 } else {
-                                    log_messages.push(format!("[{}] Dosya kaydedildi: {}", 
-                                        chrono::Local::now().format("%H:%M:%S"), output_path.display()));
+                                    log_messages.push(format!("[{}] Dosya kaydedildi: {}", ts, output_path.display()));
+                                    crate::logger::log(
+                                        crate::logger::Level::Info,
+                                        "preview",
+                                        &format!("Dosya kaydedildi: {}", output_path.display()),
+                                    );
                                 }
                             }
                         }
@@ -1550,6 +1624,12 @@ impl AutoTranslateApp {
         
         ui.group(|ui| {
             ui.strong("Uygulama Günlüğü");
+            ui.label(
+                RichText::new(format!("Dosya: {}", self.log_path.display()))
+                    .monospace()
+                    .size(10.0)
+                    .weak(),
+            );
             ScrollArea::vertical()
                 .max_height(200.0)
                 .show(ui, |ui| {
@@ -1557,9 +1637,14 @@ impl AutoTranslateApp {
                         ui.label(RichText::new(msg).monospace().size(11.0));
                     }
                 });
-            if ui.button("Günlüğü Temizle").clicked() {
-                self.log_messages.clear();
-            }
+            ui.horizontal(|ui| {
+                if ui.button("📂 Log Dosyasını Aç").clicked() {
+                    open_log_file(&self.log_path);
+                }
+                if ui.button("Görüntüyü Temizle (dosya korunur)").clicked() {
+                    self.log_messages.clear();
+                }
+            });
         });
     }
 }
