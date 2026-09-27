@@ -459,6 +459,7 @@ dependencies = [
  "serde",
  "serde_json",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

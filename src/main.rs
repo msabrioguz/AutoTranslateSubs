@@ -5,6 +5,7 @@ mod app;
 mod logger;
 mod models;
 mod ollama_client;
+mod sound;
 mod subtitle_parser;
 
 use app::AutoTranslateApp;

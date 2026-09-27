@@ -99,6 +99,10 @@ fn default_skip_translated() -> bool {
     true
 }
 
+fn default_completion_sound() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub ollama_url: String,
@@ -111,6 +115,9 @@ pub struct AppConfig {
     /// files without this field keep working thanks to the serde default.
     #[serde(default = "default_skip_translated")]
     pub skip_translated: bool,
+    /// Play a system chime when a file finishes (default on).
+    #[serde(default = "default_completion_sound")]
+    pub completion_sound: bool,
 }
 
 impl Default for AppConfig {
@@ -123,6 +130,7 @@ impl Default for AppConfig {
             target_language: Language::Turkish,
             last_directory: None,
             skip_translated: default_skip_translated(),
+            completion_sound: default_completion_sound(),
         }
     }
 }

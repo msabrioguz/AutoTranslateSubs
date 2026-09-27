@@ -625,6 +625,7 @@ impl AutoTranslateApp {
         let stop_flag = self.stop_translation.clone();
         let source_lang = self.config.source_language;
         let target_lang = self.config.target_language;
+        let completion_sound = self.config.completion_sound;
         let log_sender = self.log_sender.clone();
         let progress_sender = self.progress_sender.clone();
 
@@ -830,6 +831,14 @@ impl AutoTranslateApp {
                                     job.error = None;
                                 }
                             }
+                            if completion_sound
+                                && matches!(
+                                    job.status,
+                                    JobStatus::Completed | JobStatus::Failed
+                                )
+                            {
+                                crate::sound::play_completion();
+                            }
                         }
                     }
                     Err(e) => {
@@ -849,6 +858,9 @@ impl AutoTranslateApp {
                                 job.error = Some(e.to_string());
                                 send_log(&format!("Translation error: {}", e));
                                 send_progress(idx, 0.0, format!("Translation error: {}", e));
+                            }
+                            if completion_sound && job.status == JobStatus::Failed {
+                                crate::sound::play_completion();
                             }
                         }
                     }
@@ -1613,6 +1625,14 @@ impl AutoTranslateApp {
                 if resumed > 0 {
                     self.log(&format!("Resumed {} previously skipped file(s)", resumed));
                 }
+            }
+            let sound_resp = ui.checkbox(
+                &mut self.config.completion_sound,
+                "Her dosya bitince uyar sesi çal",
+            );
+            if sound_resp.changed() && self.config.completion_sound {
+                crate::sound::play_completion();
+                self.log("Completion sound enabled");
             }
             if ui.button("Ayarları Kaydet").clicked() {
                 self.save_config();
