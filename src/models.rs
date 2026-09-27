@@ -177,7 +177,6 @@ pub struct BatchTranslationRequest {
     pub model: String,
     pub prompt: String,
     pub stream: bool,
-    pub format: String,
     pub options: TranslationOptions,
 }
 

@@ -133,6 +133,11 @@ impl OllamaClient {
     }
 
     /// Sends one batch request for `chunk`; returns the raw model response.
+    ///
+    /// No `format: "json"`: Ollama's JSON grammar makes the model end the
+    /// response after the first object (done_reason=stop), so only 1 entry
+    /// per chunk ever came back. Without the grammar the model returns the
+    /// full array; `parse_batch_response` tolerates imperfect output.
     fn request_batch_chunk(
         &self,
         chunk: &[(usize, &String)],
@@ -145,7 +150,6 @@ impl OllamaClient {
             model: self.config.selected_model.clone(),
             prompt,
             stream: false,
-            format: "json".to_string(),
             options: Default::default(),
         };
 
@@ -740,5 +744,47 @@ mod tests {
         assert_eq!(covered, 1);
         assert_eq!(results[0], "x");
         assert!(results[1].is_empty());
+    }
+
+    #[test]
+    #[ignore = "needs a running local Ollama: cargo test -- --ignored"]
+    fn e2e_batch_covers_all_entries() {
+        let config_path = dirs::config_dir()
+            .unwrap_or_default()
+            .join("auto-translate-subs")
+            .join("config.json");
+        let config: AppConfig = std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        if config.selected_model.is_empty() {
+            eprintln!("skipped: no model in {}", config_path.display());
+            return;
+        }
+        let client = OllamaClient::new(&config).expect("client");
+        let texts: Vec<String> = (0..5)
+            .map(|i| format!("Subtitle line number {} with some sample English text.", i))
+            .collect();
+
+        let (results, stats) = client
+            .translate_batch(&texts, Language::English, Language::Turkish, |_, _| true)
+            .expect("translate_batch");
+        eprintln!("{}", stats.summary());
+
+        assert_eq!(stats.batch_requests, 1);
+        assert_eq!(
+            stats.batch_covered, 5,
+            "batch must cover every entry: {:?}",
+            stats.batch_diagnostics
+        );
+        assert_eq!(stats.batch_failures, 0);
+        assert_eq!(
+            stats.single_requests, 0,
+            "single fallback should not trigger: {}",
+            stats.summary()
+        );
+        for (i, r) in results.iter().enumerate() {
+            assert!(!r.trim().is_empty(), "entry {} not translated", i);
+        }
     }
 }
