@@ -247,7 +247,9 @@ fn apply_theme(ctx: &egui::Context) {
         *visuals = egui::Visuals::dark();
         visuals.hyperlink_color = ACCENT;
         visuals.selection.bg_fill = ACCENT;
-        visuals.selection.stroke = egui::Stroke::new(1.0_f32, ACCENT);
+        // Selected labels (tabs, combo items) paint their text with
+        // `selection.stroke`, so this must contrast with `bg_fill`.
+        visuals.selection.stroke = egui::Stroke::new(1.0_f32, egui::Color32::WHITE);
         visuals.error_fg_color = ERR_TEXT;
         visuals.window_rounding = egui::Rounding::same(8.0);
         visuals.menu_rounding = egui::Rounding::same(6.0);
@@ -264,6 +266,13 @@ fn apply_theme(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 4.0);
     ctx.set_style(style);
+}
+
+/// Paints a small filled dot. Used instead of colored emoji, which the
+/// built-in egui fonts do not cover (they would render as a hollow box).
+fn color_dot(ui: &mut Ui, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(9.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
 }
 
 /// Opens the log file with the operating system's default application.
@@ -551,18 +560,13 @@ impl AutoTranslateApp {
                         ToastKind::Success => OK_TEXT,
                         ToastKind::Error => ERR_TEXT,
                     };
-                    let icon = match toast.kind {
-                        ToastKind::Info => "ℹ️",
-                        ToastKind::Success => "✅",
-                        ToastKind::Error => "❌",
-                    };
                     egui::Frame::popup(ui.style())
                         .stroke(egui::Stroke::new(1.0_f32, color))
                         .rounding(egui::Rounding::same(6.0))
                         .show(ui, |ui| {
                             ui.set_max_width(360.0);
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(icon).color(color));
+                                color_dot(ui, color);
                                 ui.label(&toast.message);
                             });
                             let response = ui
@@ -1346,13 +1350,18 @@ impl eframe::App for AutoTranslateApp {
                     ui.spinner();
                     ui.label("Bağlantı kontrol ediliyor");
                 } else {
-                    let status_text = match &self.connection_status {
-                        ConnectionStatus::Connected => "🟢 Ollama Bağlı",
-                        ConnectionStatus::Disconnected => "🔴 Ollama Bağlı Değil",
-                        ConnectionStatus::Error(e) => &format!("🔴 Hata: {}", e),
-                        ConnectionStatus::Unknown => "⚪ Bağlantı Kontrol Ediliyor",
+                    let (dot, text) = match &self.connection_status {
+                        ConnectionStatus::Connected => (OK_TEXT, "Ollama Bağlı".to_string()),
+                        ConnectionStatus::Disconnected => {
+                            (DANGER_FILL, "Ollama Bağlı Değil".to_string())
+                        }
+                        ConnectionStatus::Error(e) => (DANGER_FILL, format!("Hata: {}", e)),
+                        ConnectionStatus::Unknown => {
+                            (egui::Color32::GRAY, "Bağlantı Durumu Bilinmiyor".to_string())
+                        }
                     };
-                    ui.label(status_text);
+                    color_dot(ui, dot);
+                    ui.label(text);
                 }
                 ui.separator();
                 ui.label(format!("Model: {}", self.config.selected_model));
@@ -1457,7 +1466,7 @@ impl AutoTranslateApp {
             }
             let is_running = self.is_running();
             if ui
-                .add_enabled(!is_running, egui::Button::new("🗑️ Temizle"))
+                .add_enabled(!is_running, egui::Button::new("Temizle"))
                 .clicked()
             {
                 self.confirm_clear = true;
