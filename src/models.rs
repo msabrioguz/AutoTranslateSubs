@@ -141,7 +141,7 @@ pub struct AppConfig {
     /// files without this field keep working thanks to the serde default.
     #[serde(default = "default_skip_translated")]
     pub skip_translated: bool,
-    /// Play a system chime when a file finishes (default on).
+    /// Play the embedded chime when a file finishes (default on).
     #[serde(default = "default_completion_sound")]
     pub completion_sound: bool,
     /// Approximate input-token budget per batch request. Batches accumulate

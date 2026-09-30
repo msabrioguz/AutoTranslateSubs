@@ -14,5 +14,5 @@ rfd = "0.15"
 walkdir = "2.5"
 chrono = "0.4"
 dirs = "5.0"
-windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_Debug", "Win32_UI_WindowsAndMessaging"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+rodio = { version = "0.22", default-features = false, features = ["playback", "wav"] }

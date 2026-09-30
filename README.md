@@ -15,7 +15,7 @@ A desktop application for automatically translating SRT and WebVTT (`.vtt`) subt
 - **Progress Tracking**: Real-time progress bars and status updates per file
 - **Translation Preview**: View and edit translations before saving
 - **Configuration Persistence**: Settings saved between sessions
-- **Completion Sound**: system chime when a file finishes translating or fails (toggle: Settings → "Her dosya bitince uyar sesi çal", default on)
+- **Completion Sound**: built-in chime (embedded WAV, played via rodio on all platforms) when a file finishes translating or fails (toggle: Settings → "Her dosya bitince uyar sesi çal", default on)
 
 ## Architecture
 
