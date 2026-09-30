@@ -12,7 +12,7 @@ A desktop application for automatically translating SRT and WebVTT (`.vtt`) subt
 - **Persistent Logging**: every action (file selection, tab changes, translation requests, per-file `[stats]`/`[diag]` lines, writes/renames, errors) is appended to `<config>/logs/app.log` with date, level and source. The file survives UI log clearing, rotates at 5 MB (one `app.log.1` backup) and can be opened from Settings → "Uygulama Günlüğü" → "📂 Log Dosyasını Aç"
 - **Multiple Language Support**: 12 languages including Turkish, English, German, French, Spanish, Italian, Portuguese, Russian, Chinese, Japanese, Korean
 - **Smart Subtitle Parsing**: Handles SRT and WebVTT (cue settings, NOTE/STYLE blocks, no cue index) as well as various SRT formats (Windows/Unix line endings, single/double blank line separators, multi-line subtitles)
-- **Progress Tracking**: Real-time progress bars and status updates per file
+- **Progress Tracking**: per-file and overall progress bars, with toast notifications (bottom-right) for errors, saves, connection/model updates and batch completion
 - **Translation Preview**: View and edit translations before saving
 - **Configuration Persistence**: Settings saved between sessions
 - **Completion Sound**: built-in chime (embedded WAV, played via rodio on all platforms) when a file finishes translating or fails (toggle: Settings → "Her dosya bitince uyar sesi çal", default on)

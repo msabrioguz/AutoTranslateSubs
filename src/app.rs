@@ -7,7 +7,35 @@ use rfd::FileDialog;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Accent color: selections, links, info toasts.
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(63, 125, 237);
+/// Fill for affirmative actions (start button).
+const SUCCESS_FILL: egui::Color32 = egui::Color32::from_rgb(40, 167, 69);
+/// Fill for destructive actions (stop button).
+const DANGER_FILL: egui::Color32 = egui::Color32::from_rgb(210, 52, 60);
+/// Readable error text on dark backgrounds.
+const ERR_TEXT: egui::Color32 = egui::Color32::from_rgb(255, 99, 99);
+/// Readable success text on dark backgrounds.
+const OK_TEXT: egui::Color32 = egui::Color32::from_rgb(80, 200, 120);
+
+const TOAST_DURATION: Duration = Duration::from_secs(5);
+const MAX_TOASTS: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ToastKind {
+    Info,
+    Success,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+struct Toast {
+    message: String,
+    kind: ToastKind,
+    created: Instant,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum AppTab {
@@ -210,6 +238,34 @@ struct ProgressUpdate {
     message: String,
 }
 
+/// Applies the app-wide visual theme: dark visuals with a custom accent,
+/// rounded widgets and slightly roomier spacing.
+fn apply_theme(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    {
+        let visuals = &mut style.visuals;
+        *visuals = egui::Visuals::dark();
+        visuals.hyperlink_color = ACCENT;
+        visuals.selection.bg_fill = ACCENT;
+        visuals.selection.stroke = egui::Stroke::new(1.0_f32, ACCENT);
+        visuals.error_fg_color = ERR_TEXT;
+        visuals.window_rounding = egui::Rounding::same(8.0);
+        visuals.menu_rounding = egui::Rounding::same(6.0);
+        for widget in [
+            &mut visuals.widgets.noninteractive,
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+            &mut visuals.widgets.open,
+        ] {
+            widget.rounding = egui::Rounding::same(6.0);
+        }
+    }
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.button_padding = egui::vec2(10.0, 4.0);
+    ctx.set_style(style);
+}
+
 /// Opens the log file with the operating system's default application.
 fn open_log_file(path: &Path) {
     let mut command = if cfg!(windows) {
@@ -259,6 +315,14 @@ pub struct AutoTranslateApp {
 
     init_sender: std::sync::mpsc::Sender<InitUpdate>,
     init_receiver: std::sync::mpsc::Receiver<InitUpdate>,
+
+    toasts: Vec<Toast>,
+    models_loading: bool,
+    connection_checking: bool,
+    announce_model_load: bool,
+    announce_connection: bool,
+    confirm_clear: bool,
+    preview_status: Option<(String, ToastKind)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -332,12 +396,20 @@ impl Default for AutoTranslateApp {
             progress_receiver,
             init_sender,
             init_receiver,
+            toasts: Vec::new(),
+            models_loading: false,
+            connection_checking: false,
+            announce_model_load: false,
+            announce_connection: false,
+            confirm_clear: false,
+            preview_status: None,
         }
     }
 }
 
 impl AutoTranslateApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        apply_theme(&cc.egui_ctx);
         let mut app = Self::default();
         app.init_ollama_client();
         app.load_models();
@@ -361,10 +433,16 @@ impl AutoTranslateApp {
     fn load_models(&mut self) {
         self.sync_client_config();
         let Some(client) = self.ollama_client.clone() else {
-            self.log("Ollama client is not initialized; check settings");
+            self.models_loading = false;
+            self.announce_model_load = false;
+            self.notify(
+                ToastKind::Error,
+                "Ollama istemcisi hazır değil; Ayarlar bölümünü kontrol edin".to_string(),
+            );
             return;
         };
         let tx = self.init_sender.clone();
+        self.models_loading = true;
         self.log("Loading models...");
         thread::spawn(move || {
             let _ = tx.send(InitUpdate::Models(
@@ -376,8 +454,11 @@ impl AutoTranslateApp {
     fn check_connection(&mut self) {
         self.sync_client_config();
         let Some(client) = self.ollama_client.clone() else {
+            self.connection_checking = false;
+            self.announce_connection = false;
             return;
         };
+        self.connection_checking = true;
         let tx = self.init_sender.clone();
         thread::spawn(move || {
             let status = match client.test_connection() {
@@ -404,6 +485,104 @@ impl AutoTranslateApp {
         }
         crate::logger::log(crate::logger::level_for(msg), "app", msg);
     }
+
+    /// Logs `message` and shows it as a toast notification. A duplicate of
+    /// the currently visible toast only refreshes its timeout.
+    fn notify(&mut self, kind: ToastKind, message: String) {
+        self.log(&message);
+        if let Some(last) = self.toasts.last_mut() {
+            if last.kind == kind && last.message == message {
+                last.created = Instant::now();
+                return;
+            }
+        }
+        self.toasts.push(Toast {
+            message,
+            kind,
+            created: Instant::now(),
+        });
+        while self.toasts.len() > MAX_TOASTS {
+            self.toasts.remove(0);
+        }
+    }
+
+    /// Returns `(finished, total, overall)`, where `finished` counts jobs
+    /// that no longer need work and `overall` is the 0..1 fraction of work
+    /// done, including partial progress of the job in flight.
+    fn progress_stats(&self) -> (usize, usize, f32) {
+        let jobs = self.translation_jobs.lock().unwrap();
+        let total = jobs.len();
+        if total == 0 {
+            return (0, 0, 0.0);
+        }
+        let mut finished = 0usize;
+        let mut work = 0.0f32;
+        for job in jobs.iter() {
+            match job.status {
+                JobStatus::Completed
+                | JobStatus::Skipped
+                | JobStatus::Failed
+                | JobStatus::Cancelled => {
+                    finished += 1;
+                    work += 1.0;
+                }
+                JobStatus::InProgress => work += job.progress.clamp(0.0, 1.0),
+                JobStatus::Pending => {}
+            }
+        }
+        (finished, total, work / total as f32)
+    }
+
+    /// Draws the toast notifications in the bottom-right corner of the UI.
+    /// Toasts disappear on their own or when clicked.
+    fn render_toasts(ctx: &egui::Context, toasts: &mut Vec<Toast>) {
+        toasts.retain(|t| t.created.elapsed() < TOAST_DURATION);
+        if toasts.is_empty() {
+            return;
+        }
+        let mut dismissed: Vec<usize> = Vec::new();
+        egui::Area::new(egui::Id::new("toast_area"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -56.0))
+            .show(ctx, |ui| {
+                for (idx, toast) in toasts.iter().enumerate() {
+                    let color = match toast.kind {
+                        ToastKind::Info => ACCENT,
+                        ToastKind::Success => OK_TEXT,
+                        ToastKind::Error => ERR_TEXT,
+                    };
+                    let icon = match toast.kind {
+                        ToastKind::Info => "ℹ️",
+                        ToastKind::Success => "✅",
+                        ToastKind::Error => "❌",
+                    };
+                    egui::Frame::popup(ui.style())
+                        .stroke(egui::Stroke::new(1.0_f32, color))
+                        .rounding(egui::Rounding::same(6.0))
+                        .show(ui, |ui| {
+                            ui.set_max_width(360.0);
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(icon).color(color));
+                                ui.label(&toast.message);
+                            });
+                            let response = ui
+                                .interact(
+                                    ui.min_rect(),
+                                    ui.id().with(("toast", idx)),
+                                    egui::Sense::click(),
+                                )
+                                .on_hover_text("Kapatmak için tıklayın");
+                            if response.clicked() {
+                                dismissed.push(idx);
+                            }
+                        });
+                    ui.add_space(6.0);
+                }
+            });
+        for idx in dismissed.into_iter().rev() {
+            toasts.remove(idx);
+        }
+    }
     
     fn add_files(&mut self, files: Vec<PathBuf>) {
         for file in files {
@@ -429,7 +608,9 @@ impl AutoTranslateApp {
                 self.add_files(files);
                 self.log(&format!("Found {} subtitle files in folder", count));
             }
-            Err(e) => self.log(&format!("Error scanning folder: {}", e)),
+            Err(e) => {
+                self.notify(ToastKind::Error, format!("Klasör taranamadı: {}", e));
+            }
         }
     }
     
@@ -468,7 +649,10 @@ impl AutoTranslateApp {
         if tab == AppTab::Translation {
             if self.selected_files.is_empty() {
                 self.tab = AppTab::Files;
-                self.log("No files selected; add files on the Files tab");
+                self.notify(
+                    ToastKind::Info,
+                    "Dosya seçilmedi; önce 'Dosyalar' sekmesinden dosya ekleyin".to_string(),
+                );
                 return;
             }
             self.tab = AppTab::Translation;
@@ -550,8 +734,18 @@ impl AutoTranslateApp {
             self.log(&format!("Resumed {} previously skipped file(s)", resumed));
         }
 
+        let parse_error_count = parse_errors.len();
         for err in parse_errors {
             self.log(&err);
+        }
+        if parse_error_count > 0 {
+            self.notify(
+                ToastKind::Error,
+                format!(
+                    "{} dosya çözümlenemedi; ayrıntılar uygulama günlüğünde",
+                    parse_error_count
+                ),
+            );
         }
         self.log(&format!("Prepared {} files for translation", job_count));
     }
@@ -931,6 +1125,36 @@ impl AutoTranslateApp {
         if let Some(handle) = self.translation_thread.take() {
             if handle.is_finished() {
                 handle.join().ok();
+                let (completed, failed, cancelled) = {
+                    let jobs = self.translation_jobs.lock().unwrap();
+                    let count = |status: &JobStatus| {
+                        jobs.iter().filter(|j| &j.status == status).count()
+                    };
+                    (
+                        count(&JobStatus::Completed),
+                        count(&JobStatus::Failed),
+                        count(&JobStatus::Cancelled),
+                    )
+                };
+                if cancelled > 0 {
+                    self.notify(
+                        ToastKind::Info,
+                        format!("Çeviri durduruldu ({} dosya tamamlandı)", completed),
+                    );
+                } else if failed > 0 {
+                    self.notify(
+                        ToastKind::Error,
+                        format!(
+                            "Çeviri bitti: {} başarılı, {} hatalı",
+                            completed, failed
+                        ),
+                    );
+                } else {
+                    self.notify(
+                        ToastKind::Success,
+                        format!("Çeviri tamamlandı: {} dosya", completed),
+                    );
+                }
             } else {
                 self.translation_thread = Some(handle);
             }
@@ -988,22 +1212,57 @@ impl eframe::App for AutoTranslateApp {
                     let count = models.len();
                     self.config.available_models = models;
                     self.models_loaded = true;
+                    self.models_loading = false;
                     if !self.config.available_models.contains(&self.config.selected_model) {
                         if let Some(first) = self.config.available_models.first() {
                             self.config.selected_model = first.clone();
                         }
                     }
-                    self.log(&format!("Loaded {} models", count));
+                    if self.announce_model_load {
+                        self.announce_model_load = false;
+                        self.notify(ToastKind::Success, format!("{} model yüklendi", count));
+                    } else {
+                        self.log(&format!("Loaded {} models", count));
+                    }
                 }
                 InitUpdate::Models(Err(e)) => {
                     self.connection_status = ConnectionStatus::Error(e.clone());
-                    self.log(&format!("Failed to load models: {}", e));
+                    self.models_loaded = true;
+                    self.models_loading = false;
+                    if self.announce_model_load {
+                        self.announce_model_load = false;
+                        self.notify(ToastKind::Error, format!("Modeller yüklenemedi: {}", e));
+                    } else {
+                        self.log(&format!("Failed to load models: {}", e));
+                    }
                 }
                 InitUpdate::Connection(status) => {
+                    self.connection_checking = false;
                     match &status {
-                        ConnectionStatus::Connected => self.log("Ollama connected"),
-                        ConnectionStatus::Disconnected => self.log("Ollama is not reachable"),
-                        ConnectionStatus::Error(e) => self.log(&format!("Connection error: {}", e)),
+                        ConnectionStatus::Connected => {
+                            self.log("Ollama connected");
+                            if self.announce_connection {
+                                self.announce_connection = false;
+                                self.notify(
+                                    ToastKind::Success,
+                                    "Ollama bağlantısı başarılı".to_string(),
+                                );
+                            }
+                        }
+                        ConnectionStatus::Disconnected => {
+                            self.announce_connection = false;
+                            self.log("Ollama is not reachable");
+                            self.notify(
+                                ToastKind::Error,
+                                "Ollama sunucusuna ulaşılamıyor; sunucunun çalıştığından emin olun"
+                                    .to_string(),
+                            );
+                        }
+                        ConnectionStatus::Error(e) => {
+                            self.announce_connection = false;
+                            self.log(&format!("Connection error: {}", e));
+                            self.notify(ToastKind::Error, format!("Bağlantı hatası: {}", e));
+                        }
                         ConnectionStatus::Unknown => {}
                     }
                     self.connection_status = status;
@@ -1017,7 +1276,10 @@ impl eframe::App for AutoTranslateApp {
         // The preview window must be closed before the app can quit
         if self.current_job_index.is_some() && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.log("Close the preview window before quitting");
+            self.notify(
+                ToastKind::Error,
+                "Çıkıştan önce önizleme penceresini kapatın".to_string(),
+            );
         }
         
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
@@ -1034,7 +1296,10 @@ impl eframe::App for AutoTranslateApp {
                     ui.separator();
                     if ui.button("Çıkış").clicked() {
                         if self.current_job_index.is_some() {
-                            self.log("Close the preview window before quitting");
+                            self.notify(
+                                ToastKind::Error,
+                                "Çıkıştan önce önizleme penceresini kapatın".to_string(),
+                            );
                         } else {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
@@ -1059,32 +1324,45 @@ impl eframe::App for AutoTranslateApp {
                 {
                     self.select_tab(AppTab::Settings);
                 }
-                ui.menu_button("Yardım", |ui| {
-                    if ui.button("Hakkında").clicked() {
-                        self.select_tab(AppTab::About);
-                        ui.close_menu();
-                    }
-                    if ui.button("Bağımlılıklar Kurulumu").clicked() {
-                        self.select_tab(AppTab::Dependencies);
-                        ui.close_menu();
-                    }
-                });
+                ui.separator();
+                if ui
+                    .selectable_label(self.tab == AppTab::About, "Hakkında")
+                    .clicked()
+                {
+                    self.select_tab(AppTab::About);
+                }
+                if ui
+                    .selectable_label(self.tab == AppTab::Dependencies, "Bağımlılıklar")
+                    .clicked()
+                {
+                    self.select_tab(AppTab::Dependencies);
+                }
             });
         });
         
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let status_text = match &self.connection_status {
-                    ConnectionStatus::Connected => "🟢 Ollama Bağlı",
-                    ConnectionStatus::Disconnected => "🔴 Ollama Bağlı Değil",
-                    ConnectionStatus::Error(e) => &format!("🔴 Hata: {}", e),
-                    ConnectionStatus::Unknown => "⚪ Bağlantı Kontrol Ediliyor",
-                };
-                ui.label(status_text);
+                if self.connection_checking {
+                    ui.spinner();
+                    ui.label("Bağlantı kontrol ediliyor");
+                } else {
+                    let status_text = match &self.connection_status {
+                        ConnectionStatus::Connected => "🟢 Ollama Bağlı",
+                        ConnectionStatus::Disconnected => "🔴 Ollama Bağlı Değil",
+                        ConnectionStatus::Error(e) => &format!("🔴 Hata: {}", e),
+                        ConnectionStatus::Unknown => "⚪ Bağlantı Kontrol Ediliyor",
+                    };
+                    ui.label(status_text);
+                }
                 ui.separator();
                 ui.label(format!("Model: {}", self.config.selected_model));
                 ui.separator();
                 ui.label(format!("Dosya: {}", self.selected_files.len()));
+                let (finished, total, _) = self.progress_stats();
+                if total > 0 {
+                    ui.separator();
+                    ui.label(format!("İlerleme: {}/{}", finished, total));
+                }
             });
         });
         
@@ -1097,7 +1375,34 @@ impl eframe::App for AutoTranslateApp {
                 AppTab::Dependencies => self.render_dependencies_tab(ui),
             }
         });
-        
+
+        if self.confirm_clear {
+            egui::Window::new("Listeyi Temizle")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    ui.label(
+                        "Seçili dosyalar ve hazırlanmış çeviri işleri listeden kaldırılacak.",
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Evet, Temizle").clicked() {
+                            self.selected_files.clear();
+                            self.translation_jobs.lock().unwrap().clear();
+                            self.confirm_clear = false;
+                            self.notify(
+                                ToastKind::Info,
+                                "Dosya listesi temizlendi".to_string(),
+                            );
+                        }
+                        if ui.button("Vazgeç").clicked() {
+                            self.confirm_clear = false;
+                        }
+                    });
+                });
+        }
+
         if self.show_file_dialog {
             if let Some(files) = FileDialog::new()
                 .add_filter("Subtitle Files (SRT, VTT)", &["srt", "vtt"])
@@ -1116,6 +1421,7 @@ impl eframe::App for AutoTranslateApp {
         }
 
         self.show_preview_window(ctx);
+        Self::render_toasts(ctx, &mut self.toasts);
 
         ctx.request_repaint_after(Duration::from_millis(100));
     }
@@ -1154,8 +1460,7 @@ impl AutoTranslateApp {
                 .add_enabled(!is_running, egui::Button::new("🗑️ Temizle"))
                 .clicked()
             {
-                self.selected_files.clear();
-                self.translation_jobs.lock().unwrap().clear();
+                self.confirm_clear = true;
             }
         });
         
@@ -1165,7 +1470,12 @@ impl AutoTranslateApp {
             let summaries = self.job_summaries();
             if self.selected_files.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("Henüz dosya seçilmedi. Yukarıdaki butonları kullanarak SRT/VTT dosyaları ekleyin.").color(egui::Color32::GRAY));
+                    ui.label(
+                        RichText::new(
+                            "Henüz dosya seçilmedi. Yukarıdaki butonları kullanarak SRT/VTT dosyaları ekleyin.",
+                        )
+                        .weak(),
+                    );
                 });
             } else {
                 egui::Grid::new("file_list").striped(true).show(ui, |ui| {
@@ -1226,11 +1536,23 @@ impl AutoTranslateApp {
                 && jobs.iter().any(|j| j.status == JobStatus::Pending);
             let is_running = self.is_running();
             
-            if ui.add_enabled(can_start && !is_running, egui::Button::new("▶ Çeviriyi Başlat").fill(egui::Color32::from_rgb(0, 150, 0))).clicked() {
+            if ui
+                .add_enabled(
+                    can_start && !is_running,
+                    egui::Button::new("▶ Çeviriyi Başlat").fill(SUCCESS_FILL),
+                )
+                .clicked()
+            {
                 self.start_translation();
             }
             
-            if ui.add_enabled(is_running, egui::Button::new("⏹ Durdur").fill(egui::Color32::from_rgb(200, 0, 0))).clicked() {
+            if ui
+                .add_enabled(
+                    is_running,
+                    egui::Button::new("⏹ Durdur").fill(DANGER_FILL),
+                )
+                .clicked()
+            {
                 self.stop_translation();
             }
             
@@ -1243,12 +1565,25 @@ impl AutoTranslateApp {
         });
         
         ui.separator();
-        
+
+        let (finished, total, overall) = self.progress_stats();
+        if total > 0 {
+            ui.horizontal(|ui| {
+                ui.strong("Genel İlerleme");
+                ui.label(RichText::new(format!("{finished}/{total} dosya")).weak());
+            });
+            ui.add(egui::ProgressBar::new(overall).show_percentage());
+            ui.separator();
+        }
+
         ScrollArea::vertical().show(ui, |ui| {
             let jobs = self.job_summaries();
             if jobs.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("Çevrilecek dosya yok. 'Dosyalar' sekmesinden dosya ekleyin.").color(egui::Color32::GRAY));
+                    ui.label(
+                        RichText::new("Çevrilecek dosya yok. 'Dosyalar' sekmesinden dosya ekleyin.")
+                            .weak(),
+                    );
                 });
             } else {
                 for (idx, job) in jobs.iter().enumerate() {
@@ -1280,13 +1615,14 @@ impl AutoTranslateApp {
                         }
                         
                         if let Some(error) = &job.error {
-                            ui.colored_label(egui::Color32::RED, format!("Hata: {}", error));
+                            ui.colored_label(ERR_TEXT, format!("Hata: {}", error));
                         }
                         
                         if (job.status == JobStatus::Completed
                             || job.status == JobStatus::Failed)
                             && ui.button("👁 Önizle").clicked()
                         {
+                            self.preview_status = None;
                             self.current_job_index = Some(idx);
                         }
                     });
@@ -1314,6 +1650,7 @@ impl AutoTranslateApp {
         let window_title = format!("Önizleme: {}", file_name);
         let jobs_mutex = self.translation_jobs.clone();
         let log_messages = &mut self.log_messages;
+        let preview_status = &mut self.preview_status;
         let mut close_requested = false;
 
         ctx.show_viewport_immediate(
@@ -1403,6 +1740,8 @@ impl AutoTranslateApp {
                                         "preview",
                                         &format!("Kaydetme hatası: {}", e),
                                     );
+                                    *preview_status =
+                                        Some((format!("Kaydetme hatası: {}", e), ToastKind::Error));
                                 } else {
                                     log_messages.push(format!("[{}] Dosya kaydedildi: {}", ts, output_path.display()));
                                     crate::logger::log(
@@ -1410,6 +1749,10 @@ impl AutoTranslateApp {
                                         "preview",
                                         &format!("Dosya kaydedildi: {}", output_path.display()),
                                     );
+                                    *preview_status = Some((
+                                        format!("Dosya kaydedildi: {}", output_path.display()),
+                                        ToastKind::Success,
+                                    ));
                                 }
                             }
                         }
@@ -1418,6 +1761,14 @@ impl AutoTranslateApp {
                         close_requested = true;
                     }
                 });
+                if let Some((message, kind)) = preview_status.as_ref() {
+                    let color = match kind {
+                        ToastKind::Error => ERR_TEXT,
+                        ToastKind::Success => OK_TEXT,
+                        ToastKind::Info => ACCENT,
+                    };
+                    ui.colored_label(color, message);
+                }
                 };
 
                 match class {
@@ -1567,20 +1918,47 @@ impl AutoTranslateApp {
             });
             
             ui.horizontal(|ui| {
-                if ui.button("🔄 Modelleri Yenile").clicked() {
+                let refresh = ui.add_enabled(
+                    !self.models_loading,
+                    egui::Button::new("🔄 Modelleri Yenile"),
+                );
+                if refresh.clicked() {
+                    self.announce_model_load = true;
                     self.load_models();
                 }
-                if ui.button("🔌 Bağlantıyı Test Et").clicked() {
+                let test = ui.add_enabled(
+                    !self.connection_checking,
+                    egui::Button::new("🔌 Bağlantıyı Test Et"),
+                );
+                if test.clicked() {
+                    self.announce_connection = true;
                     self.check_connection();
+                }
+                if self.models_loading {
+                    ui.spinner();
                 }
             });
             
-            if self.models_loaded && !self.config.available_models.is_empty() {
+            if !self.models_loaded {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Modeller yükleniyor…");
+                });
+            } else if self.config.available_models.is_empty() {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "Model bulunamadı — Ollama'nın çalıştığından emin olun",
+                );
+            } else {
                 egui::ComboBox::from_label("Model Seç")
                     .selected_text(&self.config.selected_model)
                     .show_ui(ui, |ui| {
                         for model in &self.config.available_models {
-                            ui.selectable_value(&mut self.config.selected_model, model.clone(), model);
+                            ui.selectable_value(
+                                &mut self.config.selected_model,
+                                model.clone(),
+                                model,
+                            );
                         }
                     });
             }
@@ -1636,11 +2014,11 @@ impl AutoTranslateApp {
             );
             if sound_resp.changed() && self.config.completion_sound {
                 crate::sound::play_completion();
-                self.log("Completion sound enabled");
+                self.notify(ToastKind::Success, "Uyarı sesi açıldı".to_string());
             }
             if ui.button("Ayarları Kaydet").clicked() {
                 self.save_config();
-                self.log("Ayarlar kaydedildi");
+                self.notify(ToastKind::Success, "Ayarlar kaydedildi".to_string());
             }
         });
         
@@ -1993,5 +2371,51 @@ mod tests {
         assert_eq!(result, Some(dir.join("input_en.de.srt")));
         assert!(!src.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn toasts_render_in_headless_context() {
+        let ctx = egui::Context::default();
+        let mut toasts = vec![
+            Toast {
+                message: "bilgi".to_string(),
+                kind: ToastKind::Info,
+                created: Instant::now(),
+            },
+            Toast {
+                message: "başarı".to_string(),
+                kind: ToastKind::Success,
+                created: Instant::now(),
+            },
+            Toast {
+                message: "hata".to_string(),
+                kind: ToastKind::Error,
+                created: Instant::now(),
+            },
+        ];
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            AutoTranslateApp::render_toasts(ctx, &mut toasts);
+        });
+
+        assert_eq!(toasts.len(), 3, "fresh toasts must stay visible");
+    }
+
+    #[test]
+    fn expired_toasts_are_removed_before_rendering() {
+        let ctx = egui::Context::default();
+        let mut toasts = vec![Toast {
+            message: "eski".to_string(),
+            kind: ToastKind::Info,
+            created: Instant::now()
+                .checked_sub(TOAST_DURATION + Duration::from_secs(1))
+                .unwrap(),
+        }];
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            AutoTranslateApp::render_toasts(ctx, &mut toasts);
+        });
+
+        assert!(toasts.is_empty(), "expired toast must be dropped");
     }
 }
