@@ -210,14 +210,18 @@ struct ProgressUpdate {
     message: String,
 }
 
-/// Opens the log file in the system file manager (Windows Explorer).
+/// Opens the log file with the operating system's default application.
 fn open_log_file(path: &Path) {
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("explorer").arg(path).spawn();
-    }
-    #[cfg(not(windows))]
-    let _ = path;
+    let mut command = if cfg!(windows) {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    let _ = command.arg(path).spawn();
 }
 
 enum InitUpdate {
